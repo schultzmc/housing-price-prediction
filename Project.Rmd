@@ -1,0 +1,164 @@
+---
+title: "Project"
+author: "Madison Schultz"
+date: "2025-11-28"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(readr)
+library(glmnet)
+library(tree)
+library(gbm)
+library(randomForest)
+```
+
+Set up of data
+```{r}
+housing <- read_csv("Housing.csv")
+head(housing)
+nrow(housing)
+```
+
+Creating Training and Test Data
+```{r}
+set.seed(123)
+test.indices <- sample(1:nrow(housing), 100)
+housing.train <- housing[-test.indices,]
+housing.test <- housing[test.indices,]
+
+nrow(housing.train)
+nrow(housing.test)
+```
+
+
+## Linear Regression
+```{r}
+lm_model <- lm(price ~ . , data = housing.train)
+summary(lm_model)
+```
+
+
+### AIC Model Selection
+```{r}
+start_model <- lm(price ~ 1, data = housing.train)
+step(start_model, direction = "forward", scope = formula(lm_model))
+```
+
+```{r}
+aic_model <- lm(price ~ . -bedrooms, data = housing.train)
+summary(aic_model)
+```
+
+
+### BIC Model Selection
+```{r}
+step(lm_model, direction = "backward", scope = formula(lm_model))
+```
+AIC and BIC provide the same model by both taking out bedrooms as a variable in the linear regression
+
+### Calculating Test MSE
+```{r}
+predict <- predict(aic_model, newdata = housing.test)
+test_mse <- mean((housing.test$price - predict)^2)
+test_mse
+```
+
+## Ridge Regression
+```{r}
+set.seed(123)
+x <- model.matrix(price ~ ., data = housing.train)[,-1]
+lambda.list.ridge = 1000 * exp(seq(0, log(1e-5), length = 100))
+ridge_mod = cv.glmnet(x, housing.train$price, alpha = 0, lambda = lambda.list.ridge, nfold = 5)
+
+bestlam = ridge_mod$lambda.min
+
+coef(ridge_mod, s = "lambda.min")
+```
+
+### Calculating test MSE
+```{r}
+ridge.pred = predict(ridge_mod, s = bestlam, newx = x)
+mean((ridge.pred-housing.train$price)^2)
+```
+Improves on the test mse but is still very high
+
+## Lasso Regression
+```{r}
+set.seed(123)
+lambda.list.lasso = 2 * exp(seq(0, log(1e-4), length = 100))
+lasso_mod = cv.glmnet(x, housing.train$price, alpha = 1, lambda = lambda.list.lasso, nfold = 10)
+
+bestlam = lasso_mod$lambda.min
+
+lasso.coef <- coef(lasso_mod, s = "lambda.min")
+lasso.coef
+```
+
+### Calculating test mse
+```{r}
+lasso.pred = predict(lasso_mod, s = bestlam, newx = x)
+mean((lasso.pred-housing.train$price)^2)
+```
+Same test mse as from ridge regression
+
+## Single Decision Tree
+```{r}
+housing.train[sapply(housing.train, is.character)] <- 
+    lapply(housing.train[sapply(housing.train, is.character)], factor)
+
+housing.test[sapply(housing.test, is.character)] <- 
+    lapply(housing.test[sapply(housing.test, is.character)], factor)
+housing.tree <- tree(price ~ ., data = housing.train)
+summary(housing.tree)
+```
+
+### Cross Validation to find best tree
+```{r}
+set.seed(123)
+cv <- cv.tree(housing.tree, FUN = prune.tree, K = 5)
+
+best.cv = min(cv$size[cv$dev == min(cv$dev)])
+pt.cv = prune.tree(housing.tree, best=best.cv)
+
+pred.pt.cv = predict(pt.cv, housing.test)
+
+mean((pred.pt.cv-housing.test$price)^2)
+```
+This single decision tree provides a test mse that is the highest.
+
+
+## Boosting Tree
+```{r}
+set.seed(123)
+boost.housing = gbm(price ~., data = housing.train, n.trees = 1000, shrinkage = 0.01, distribution = "gaussian")
+
+summary(boost.housing)
+```
+
+### Calculating Test MSE
+```{r}
+pred.pt.cv = predict(boost.housing, housing.test)
+
+mean((pred.pt.cv-housing.test$price)^2)
+```
+
+
+## Random Forest
+```{r}
+set.seed(1)
+rf.housing = randomForest(price ~ ., data=housing.train, importance=TRUE)
+rf.housing
+```
+
+
+### Calculating Test MSE
+```{r}
+pred.pt.cv = predict(rf.housing, housing.test)
+
+mean((pred.pt.cv-housing.test$price)^2)
+```
